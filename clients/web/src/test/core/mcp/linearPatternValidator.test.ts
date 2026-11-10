@@ -106,6 +106,70 @@ describe("LinearPatternJsonSchemaValidator — parity with the SDK provider", ()
   });
 });
 
+describe("LinearPatternJsonSchemaValidator — schemas sharing an $id", () => {
+  const id = "urn:inspector:test:shared";
+
+  it("validates against a changed schema that kept its $id", () => {
+    const provider = new LinearPatternJsonSchemaValidator();
+    const before: JsonSchemaType = {
+      $id: id,
+      type: "object",
+      properties: { temp: { type: "number" } },
+      required: ["temp"],
+    };
+    const after: JsonSchemaType = {
+      $id: id,
+      type: "object",
+      properties: { temp: { type: "string", pattern: "^-?\\d+C$" } },
+      required: ["temp"],
+    };
+    expect(provider.getValidator(before)({ temp: 21 }).valid).toBe(true);
+
+    const validate = provider.getValidator(after);
+    expect(validate({ temp: "21C" }).valid).toBe(true);
+    expect(validate({ temp: 21 })).toEqual({
+      valid: false,
+      data: undefined,
+      errorMessage: "data/temp must be string",
+    });
+  });
+
+  it("validates each of two schemas declaring the same $id against itself", () => {
+    const provider = new LinearPatternJsonSchemaValidator();
+    const a: JsonSchemaType = { $id: id, type: "object", required: ["a"] };
+    const b: JsonSchemaType = { $id: id, type: "object", required: ["b"] };
+    expect(provider.getValidator(a)({ a: 1 }).valid).toBe(true);
+    expect(provider.getValidator(b)({ b: 1 }).valid).toBe(true);
+    expect(provider.getValidator(b)({ a: 1 }).errorMessage).toBe(
+      "data must have required property 'b'",
+    );
+    // Alternating back does not trip Ajv's "already exists" check either.
+    expect(provider.getValidator(a)({ a: 1 }).valid).toBe(true);
+    expect(provider.getValidator(a)({ b: 1 }).errorMessage).toBe(
+      "data must have required property 'a'",
+    );
+  });
+
+  it("keeps a $id registered by an earlier schema's $defs usable", () => {
+    const provider = new LinearPatternJsonSchemaValidator();
+    const nested = { $id: id, type: "number" };
+    const outer: JsonSchemaType = {
+      type: "object",
+      $defs: { nested },
+      properties: { n: { $ref: id } },
+    };
+    const validateOuter = provider.getValidator(outer);
+    expect(validateOuter({ n: 1 }).valid).toBe(true);
+    // The $defs entry itself is reused; a different schema under the same
+    // $id replaces it without disturbing the already compiled outer schema.
+    expect(provider.getValidator(nested)("x").valid).toBe(false);
+    expect(provider.getValidator({ $id: id, type: "string" })("x").valid).toBe(
+      true,
+    );
+    expect(validateOuter({ n: "x" }).valid).toBe(false);
+  });
+});
+
 describe("LinearPatternJsonSchemaValidator — bounded pattern evaluation", () => {
   const redos: JsonSchemaType = {
     type: "object",

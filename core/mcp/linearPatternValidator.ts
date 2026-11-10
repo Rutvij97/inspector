@@ -239,13 +239,22 @@ export class LinearPatternJsonSchemaValidator implements jsonSchemaValidator {
   getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
     const engine = this.engineFor(declaredDialect(schema));
     const id: unknown = (schema as { $id?: unknown }).$id;
-    // `getSchema` can compile too: Ajv compiles a schema registered by `$id`
-    // — including a `$defs` entry of an earlier schema — on first lookup.
-    const validate: ValidateFunction = this.tracked(
-      () =>
-        (typeof id === "string" ? engine.getSchema(id) : undefined) ??
-        engine.compile(schema),
-    );
+    const validate: ValidateFunction = this.tracked(() => {
+      if (typeof id === "string") {
+        // `getSchema` can compile too: Ajv compiles a schema registered by
+        // `$id` — including a `$defs` entry of an earlier schema — on first
+        // lookup. Reuse it only for the very object it was built from. Ajv
+        // would otherwise answer for a DIFFERENT schema that happens to carry
+        // the same `$id` (a tool whose `outputSchema` changed, or two tools
+        // declaring the same `$id`), and compiling the new one while the old
+        // is registered throws "schema with key or id already exists", so
+        // the stale registration goes first.
+        const registered = engine.getSchema(id);
+        if (registered?.schema === schema) return registered;
+        if (registered) engine.removeSchema(id);
+      }
+      return engine.compile(schema);
+    });
     const overBudget = this.overBudget.has(validate);
     return (input: unknown) => {
       this.ledger.reset();
